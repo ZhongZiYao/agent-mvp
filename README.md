@@ -15,7 +15,7 @@
 > [Agent 后端全景总结](docs/learning/agent-backend-summary.md)
 >
 > **技术栈**：AgentScope Java 2.0.5 · Spring Boot 4.1.3 · Java 21 · WebFlux（响应式）
-> **测试**：44 条全绿，全部用假模型与假存储，不烧 token、不联网
+> **测试**：59 条全绿，全部用假模型与假存储，不烧 token、不联网
 
 ---
 
@@ -26,7 +26,7 @@
 | 0 | 纯框架最小 Agent（先当一次框架使用者） | ✅ 完成 |
 | 1 | 接入层（WS 帧 → 受理 → 编排） | ✅ 完成 |
 | 2 | 装配层（手写 AgentFactory + 治理装配器） | ✅ 完成 |
-| 3 | 治理层（中间件链 + `MiddlewareOrders` 契约） | ⬜ 待做 |
+| 3 | 治理层（中间件链 + `MiddlewareOrders` 契约） | ✅ 完成 |
 | 4 | 记忆 + RAG | ⬜ 待做 |
 | 5 | 出站（过滤 + 缓存） | ⬜ 待做 |
 | 6 | 多租户 + admin | ⬜ 待做 |
@@ -47,6 +47,8 @@ agent-mvp/
 │   ├── model/                 SwappableModel（自建 Model 装饰器：热替换 + 归因）
 │   ├── agent/                 MvpAgentFactory · MvpGovernanceAssembler · InMemoryAgentStateStore
 │   │                          ToolAuditMiddleware · OrderTools · SimpleAgentFactory（站 0 裸版）
+│   │                          MvpMiddlewareOrders · AuditTrailMiddleware · RedactionMiddleware
+│   │                          InputGuardMiddleware（站 3：治理层 + 顺序契约）
 │   └── auth/                  TokenService（零依赖自签 HMAC）
 ├── mvp-app/                   运行层：HTTP / SSE / WebSocket 接入
 │   ├── auth/                  AuthController · AuthWebFilter
@@ -381,11 +383,15 @@ Builder.maxRetries(n)
 ```
 
 `GracefulShutdownMiddleware` 住在 `io.agentscope.core.shutdown` 包，
-由 `ReActAgent.Builder#build()` **自动插到链首**（你删不掉）；
+由 **`ReActAgent` 的构造函数**插到链首（不是 `Builder#build()` —— 站 3 用字节码查清了）；
 有 `stateStore` 时还会自动绑定状态保存 → **优雅停机时自动存会话状态**。
 
 > **读文档读不出来这个** —— 只有把运行期的实际装配结果打出来才看得见。
 > 这就是 `/api/agent/assembly` 存在的理由。
+>
+> ⚠️ **站 3 的补充修正**：它**不参与 `order()` 协商** —— 排序发生在构造函数**之前**，
+> 而它是构造函数里直接 `add` 到链首的。所以它带着默认 `order()=1` 排在所有 `order>1` 的中间件**前面**，
+> **你注册 `order=999` 也压不过它**。快照里的 `orderNegotiated=false` 字段就是为它加的。
 
 ### 站 2 踩的两个坑
 
@@ -409,3 +415,109 @@ Builder.maxRetries(n)
 站 0 的 `SimpleAgentFactory` 也被这条纪律改了 ——
 它原本是「不挂治理链的裸版」，现在也接到了 `governance.applyTo(builder)`：
 **裸版看起来只是教学样本，但它同样是一条能建出 Agent 的生产代码路径。**
+
+---
+
+## 站 3 验证的框架事实（治理层）
+
+### ① `order()` 语义：**数值大的在外**（这一站唯一不能猜的一点）
+
+> 靠外 = **入站先执行、出站后执行**。相同数值保持注册顺序。默认 **1**。
+
+**字节码两处**（可复现）：
+
+```java
+// ① ReActAgent$Builder#build() 的倒数第二步 —— 排序在这里
+middlewares.sort(Comparator.comparingInt(MiddlewareBase::order).reversed());   // 降序
+
+// ② MiddlewareChain.build(...) —— 链实现在这里，倒序包裹
+Function<I, Flux<AgentEvent>> chain = terminal;      // 最内层 = 终端
+for (int i = size - 1; i >= 0; i--) {                 // 从列表尾部往前包
+    chain = input -> method.apply(middlewares.get(i), agent, ctx, input, chain);
+}
+return chain;                                         // 列表第 0 个 = 最外层
+```
+
+排序键就是 `MiddlewareBase.order()`（BootstrapMethods #2 → `REF_invokeInterface MiddlewareBase.order:()I`）。
+`.reversed()` = 降序 ⇒ **order 越大越靠列表前部**；链实现倒序包裹 ⇒ **列表第 0 个 = 最外层**。
+
+**运行时探针**（`MiddlewareChainOrderTest`，探针 order = 200 / 120 / 50）：
+
+| 观测 | 实际值 |
+|---|---|
+| 入站记录 | `[in:200, in:120, in:50]` ← **降序** |
+| 出站记录 | `[out:50, out:120, out:200]` ← **逆序** |
+
+### ② 挂载顺序是**无效的** —— 框架会重排
+
+框架在 `build()` 里按 `order()` 降序重排一次，所以：
+
+- **自己预排序 = 白写**（会被整体覆盖）；
+- `order()` 是**唯一**决定因素；
+- 只有**同 `order` 值**时，挂载顺序才决定相对次序（`List.sort` 稳定）。
+
+demo 站 2 那版 `MvpGovernanceAssembler` 里有一段升序预排序，站 3 查明后**已删除**。
+
+### ③ 框架自带 3 个中间件：逐个查清（含 2 条早期结论修正）
+
+| 类 | 自动注入？ | `order()` | 行为 |
+|---|---|---|---|
+| `GracefulShutdownMiddleware` | ✅ **链首硬编码** | 1（**不参与协商**） | 停机时拒绝继续推理/执行 |
+| `FinalAnswerFilterMiddleware` | ❌ **必须显式注册** | 1 | 缓冲文本、丢弃「调用工具前的中间叙述」，只在 `ModelCallEnd` 一次性放出 |
+| `TaskReminderMiddleware` | ⚠️ 仅 `taskListEnabled=true` | 1 | 把待办清单注入系统提示词 |
+
+**两条修正**：
+
+1. 站 2 记的是「`Builder#build()` 自动插到链首」—— **位置对，机制错**。
+   它是 **`ReActAgent` 构造函数**插的，而排序发生在构造函数**之前**
+   ⇒ 它**带着 `order()=1` 硬编码在链首，你注册 `order=999` 也压不过它**。
+2. `FinalAnswerFilterMiddleware` **框架不自动注入** —— 全 core jar 扫描显示除它自身外**无人引用**。
+
+`FinalAnswerFilterMiddleware` 的代价：**流式打字机效果完全消失**（要等到 `ModelCallEnd` 才一次性放出）。
+customer_work 的 `AgentProperties#finalAnswerFilterEnabled` **默认 `false`**，注释里明写
+「默认关闭，因为代价对本项目的 C 端不可接受」。demo 挂它只为对照。
+
+### ④ customer_work 的 27 个中间件里，**没有一个是框架那 3 个的变体**
+
+| 框架件 | 最接近的 | 判定 |
+|---|---|---|
+| `GracefulShutdownMiddleware` | `GracefulShutdownService` | **不是变体，是正确使用框架能力**（直接用框架的 `GracefulShutdownManager`） |
+| `TaskReminderMiddleware` | `TaskPlanCaptureMiddleware` | **互补**：框架件在提示词侧（给模型看），那个在输出侧（给用户看）；**共用同一底座**（`TodoTools`） |
+| `FinalAnswerFilterMiddleware` | `MaskingMiddleware` / `SensitiveWordMiddleware` | **都不是变体**：前者决定「哪段文本才算最终答复」，后两者是「已确定的答复要不要脱敏/拦词」 |
+
+⇒ **框架给的是插槽 + 排序契约，不是策略。27 个全是自建。**
+
+### ⑤ 顺序契约直接决定安全结论（带**对照组**）
+
+demo 里 `AuditTrailMiddleware`（order=150）在 `RedactionMiddleware`（order=125）**之外**，
+于是审计留痕里落的是**脱敏后**的 `138****8000`。
+
+`GovernanceSemanticsTest` 里有一条**对照组**：故意把两个 order 对调，
+断言留痕里**确实**出现未脱敏手机号 —— 把「审计必须比脱敏更外」从一句没人验证过的说法，
+变成一个**可复现的反例**。
+
+### 站 3 踩的坑
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| 改写答复后「结束原因」变成正常结束 | 用 `Msg.builder()` 重建消息 → 框架的结束原因在 metadata 里，重建会**静默退回** | 用 `Msg#withContent` —— 只换 content，`id/name/role/metadata/timestamp/usage` 全保留 |
+| 顺序怎么改都不生效 | 自己的预排序被框架 `build()` 的降序重排覆盖 | 只声明 `order()`，别自己排 |
+| 治理件拦下请求后调用方「没收到答复」 | 返回了 `Flux.empty()`（空流 = 没有答复） | 自己造一个 `AgentResultEvent`（短路 ≠ 空流） |
+| 钩子体在装配阶段就执行了 | 直接返回 Flux 而没用 `Flux.defer` | 钩子体在**订阅时**执行，必须 `Flux.defer` 包住 |
+| `GracefulShutdownMiddleware` 压不下去 | 它是构造函数硬塞链首的，**不参与 order 协商** | 认这个事实；快照里用 `orderNegotiated=false` 标出来 |
+| 找排序逻辑找不到 | `MiddlewareChain.build` 里**根本没有排序**，排序在 `Builder#build()` 里 | 分清「**谁排序**」和「**谁包裹**」两件事 |
+
+### 装配快照的 `chain` 段（站 3 新增）
+
+`GET /api/agent/assembly` 现在多返回一段 `chain`，把**生效链**摊开（从外到内）：
+
+| # | 中间件 | order | 来源 | 参与 order 协商？ |
+|---|---|---|---|---|
+| 1 | `GracefulShutdownMiddleware` | 1 | 框架自动注入（链首硬编码） | **否** |
+| 2 | `AuditTrailMiddleware` | 150 | 自建 | 是 |
+| 3 | `RedactionMiddleware` | 125 | 自建 | 是 |
+| 4 | `InputGuardMiddleware` | 120 | 自建 | 是 |
+| 5 | `ToolAuditMiddleware` | 100 | 自建 | 是 |
+| 6 | `FinalAnswerFilterMiddleware` | 1 | 框架自带（需显式注册） | 是 |
+
+第 1 项 **order=1 却排在 order=150 前面** —— 这一行就是「链首硬编码、不参与协商」的可视化。
