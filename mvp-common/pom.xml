@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>agent-mvp-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>mvp-common</artifactId>
+  <name>mvp-common</name>
+  <description>可复用基础设施：模型装配、Agent 装配、治理中间件、记忆、RAG</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+
+    <!--
+      AgentScope Harness：包含 core（Agent / Model / Tool / Middleware / State / Skill / RAG /
+      Memory / Permission / Sandbox / Subagent / PlanMode / Compaction）。
+      用 harness 而非只用 core，是为了后续能切 HarnessAgent 做长会话压缩对照。
+    -->
+    <dependency>
+      <groupId>io.agentscope</groupId>
+      <artifactId>agentscope-harness</artifactId>
+    </dependency>
+
+    <!--
+      模型实现：2.0.0 GA 起内置模型实现从 agentscope-core 拆到独立扩展模块
+      （io.agentscope.core.model.* -> io.agentscope.extensions.model.{provider}.*）。
+      MiniMax 走 OpenAI 兼容协议 + 专用 MiniMaxFormatter，所以只需要 openai 扩展。
+    -->
+    <dependency>
+      <groupId>io.agentscope</groupId>
+      <artifactId>agentscope-extensions-model-openai</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-configuration-processor</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

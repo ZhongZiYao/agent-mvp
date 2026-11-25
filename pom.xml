@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.3</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.example</groupId>
+  <artifactId>agent-mvp-parent</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>agent-mvp-parent</name>
+  <description>AgentScope Java 落地边界清单 —— 逐站对照「框架直接给 / 半自建 / 全自建」</description>
+
+  <modules>
+    <module>mvp-common</module>
+    <module>mvp-app</module>
+  </modules>
+
+  <properties>
+    <!--
+      Java 基线：21。
+      Spring Boot 4.1.3 的「最低要求」是 Java 17（官方 System Requirements 原文：
+      requires at least Java 17 and is compatible with versions up to and including Java 27），
+      但 4.x 对虚拟线程（Loom）支持最好，Spring Framework 7 也鼓励 21+ 的现代特性。
+      本 demo 是独立工程、不与 customer_work 主仓库共享代码，故取 21。
+      ⚠️ 主仓库 customer_work 仍锁 JDK 17（见其 CLAUDE.md），两边不要混用编译产物。
+      要退回 17：只需把下面这一行改成 17（字节码随之锁回 17）。
+    -->
+    <java.version>21</java.version>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!--
+      AgentScope 版本：以 Maven Central 的 release 为准，不用 -BETA / -RC 预发布。
+      2.0.5 是当前最新 release（2026-11），修回了 state persistence / tool-call argument
+      handling / context compaction / memory durability / skills / sandboxes 六类问题。
+      注意：官方 spring-boot-starter 面向 Spring Boot 4，本项目只用 BOM + harness + extensions，
+      装配层全部手写 —— 这正是本 MVP 要验证的「框架给什么、我们建什么」。
+    -->
+    <agentscope.version>2.0.5</agentscope.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- AgentScope BOM：统一管理 core / harness / extensions 全部坐标版本 -->
+      <dependency>
+        <groupId>io.agentscope</groupId>
+        <artifactId>agentscope-bom</artifactId>
+        <version>${agentscope.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

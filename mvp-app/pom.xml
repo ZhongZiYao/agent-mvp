@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>agent-mvp-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>mvp-app</artifactId>
+  <name>mvp-app</name>
+  <description>可运行面：WebSocket 接入、受理、编排、出站</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>mvp-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- WebFlux：WS 接入用 reactive 栈（与 customer_work 一致） -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webflux</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        只做引用，不要再声明 <executions>。
+        spring-boot-starter-parent 的 pluginManagement 里已经有一个 id=repackage 的 execution，
+        子模块再声明一遍会出现两次 repackage（日志里能看到 (repackage) 和 (default) 各跑一次），
+        第二次是对已经是 fat jar 的产物再 repackage —— 能过，但属于不该有的重复动作。
+      -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
