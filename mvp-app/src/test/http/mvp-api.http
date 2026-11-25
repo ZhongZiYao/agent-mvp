@@ -1,0 +1,80 @@
+### IntelliJ IDEA HTTP Client —— 不用 Postman，双击每一条就能跑
+###
+### 启动应用：mvn -B spring-boot:run -pl mvp-app
+### 或：java -jar mvp-app\target\mvp-app-0.1.0-SNAPSHOT.jar
+###
+### 站 1 起，HTTP 端点需要鉴权。顺序：
+###   ① 先调 /api/auth/token 拿令牌
+###   ② 把返回的 token 填进下面 {{token}} 占位符
+###   ③ 再调 /api/chat/** （带 Authorization 头）
+
+@baseUrl = http://localhost:8088
+@token = REPLACE_WITH_TOKEN_FROM_STEP_1
+
+### 1) 拿令牌（演示端点；生产环境由真实登录签发）
+POST {{baseUrl}}/api/auth/token
+Content-Type: application/json
+
+{
+  "userId": "u1001"
+}
+
+### 2) 同步问一句（会真的调模型；第一次调用会触发 ReAct：模型 → 调工具 → 再推理）
+POST {{baseUrl}}/api/chat/sync
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "message": "我的订单 SO202611250001 到哪了？"
+}
+
+### 3) 同步问一句（带会话号；会话号必须以 u1001- 开头，否则被拒）
+POST {{baseUrl}}/api/chat/sync
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "sessionId": "u1001-demo-session",
+  "message": "订单 SO202611250002 退款到账了吗？"
+}
+
+### 4) 流式问一句（SSE，逐字返回）
+POST {{baseUrl}}/api/chat/stream
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "message": "我的订单 SO202611250001 到哪了？"
+}
+
+### 5) 站 2：装配快照 —— 看这个 Agent 身上到底装了什么
+###    （装配层的错误几乎全是「不报错的静默错误」：中间件漏挂、权限没生效、
+###      maxRetries 被 modelExecutionConfig 静默丢弃……只有打出来才看得见）
+GET {{baseUrl}}/api/agent/assembly
+Authorization: Bearer {{token}}
+
+### 6) 不带令牌（期望 401 unauthorized）
+POST {{baseUrl}}/api/chat/sync
+Content-Type: application/json
+
+{
+  "message": "我的订单 SO202611250001 到哪了？"
+}
+
+### ------------------------------------------------------------------
+### WebSocket 接入
+### ------------------------------------------------------------------
+### 浏览器控制台里连（注意 token 在 query 里 —— 浏览器 WS API 不支持自定义 header）：
+###
+###   const ws = new WebSocket('ws://localhost:8088/ws/user?token=' + token);
+###   ws.onmessage = (e) => console.log(e.data);
+###   ws.onopen = () => ws.send(JSON.stringify({
+###     type: 'chat',
+###     data: { clientMsgId: 'c1', message: '我的订单 SO202611250001 到哪了？' }
+###   }));
+###
+### 应当依次收到：chat_accepted → chat_chunk(若干) → chat_done
+### 重复发同一个 clientMsgId → 收到 status=DUPLICATE 的 chat_accepted（不会重复调模型）
+###
+### 命令行探测（零依赖，用 JDK 自带的 java.net.http.WebSocket）：
+###   java -Dws.base=ws://localhost:8088/ws/user scripts\WsProbe.java <token>
