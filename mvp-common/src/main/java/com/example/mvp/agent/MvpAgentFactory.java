@@ -2,20 +2,26 @@ package com.example.mvp.agent;
 
 import com.example.mvp.config.AgentProperties;
 import io.agentscope.core.ReActAgent;
+import io.agentscope.core.middleware.FinalAnswerFilterMiddleware;
+import io.agentscope.core.middleware.MiddlewareBase;
 import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.permission.PermissionBehavior;
 import io.agentscope.core.permission.PermissionContextState;
 import io.agentscope.core.permission.PermissionRule;
+import io.agentscope.core.shutdown.GracefulShutdownMiddleware;
 import io.agentscope.core.state.AgentStateStore;
 import io.agentscope.core.tool.Toolkit;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 站 2：<b>装配层主体</b> —— 把「一个能跑的客服 Agent」拼出来。
@@ -217,6 +223,9 @@ public class MvpAgentFactory {
                 : agent.getMiddlewares().stream()
                         .map(mw -> mw.getClass().getSimpleName() + "@" + mw.order())
                         .toList());
+        // 站 3：生效链的<b>结构化</b>视图 —— 位置、order 值、来源、是否参与 order 协商。
+        // 上面的 middlewares 是同一份信息的扁平版本（站 2 的形状），这里补上站 3 才有的维度。
+        out.put("chain", chainView(agent.getMiddlewares()));
         out.put("toolNames", agent.getToolkit() == null ? List.of() : List.copyOf(agent.getToolkit().getToolNames()));
         ExecutionConfig exec = agent.getModelExecutionConfig();
         Map<String, Object> execView = new LinkedHashMap<>();
@@ -227,5 +236,52 @@ public class MvpAgentFactory {
         execView.put("backoffMultiplier", exec == null ? null : exec.getBackoffMultiplier());
         out.put("modelExecutionConfig", exec == null ? null : execView);
         return out;
+    }
+
+    /**
+     * 站 3：把<b>生效链</b>摊成结构化视图（从外到内）。
+     *
+     * <p><b>这份列表就是执行顺序</b>：框架在 {@code build()} 里按 {@code order()} 降序排完，
+     * 再由 {@code ReActAgent} 构造函数把 {@code GracefulShutdownMiddleware} 硬塞到链首。
+     * 索引 0 = 最外层（入站最先执行、出站最后执行）。</p>
+     *
+     * <p><b>{@code orderNegotiated=false} 的那一项是站 3 最重要的发现</b>：
+     * {@code GracefulShutdownMiddleware} 的 {@code order()} 是框架默认值 1，
+     * 却<b>排在所有 order &gt; 1 的中间件之前</b> —— 因为它不是通过 {@code order()} 排进来的，
+     * 而是框架在构造函数里直接 {@code add} 到链首的。
+     * <b>你注册一个 order=999 的中间件也压不过它。</b></p>
+     */
+    private List<Map<String, Object>> chainView(List<MiddlewareBase> effective) {
+        List<Map<String, Object>> chain = new ArrayList<>();
+        if (effective == null) {
+            return chain;
+        }
+        Set<MiddlewareBase> selfRegistered = new LinkedHashSet<>(governance.selfRegistered());
+        int position = 0;
+        for (MiddlewareBase mw : effective) {
+            position++;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("position", position);
+            item.put("name", mw.getClass().getSimpleName());
+            item.put("order", mw.order());
+            item.put("source", sourceOf(mw, selfRegistered));
+            item.put("orderNegotiated", !(mw instanceof GracefulShutdownMiddleware));
+            chain.add(item);
+        }
+        return chain;
+    }
+
+    /** 这个中间件是谁挂上去的。 */
+    private String sourceOf(MiddlewareBase mw, Set<MiddlewareBase> selfRegistered) {
+        if (mw instanceof GracefulShutdownMiddleware) {
+            return "框架自动注入（链首硬编码，不参与 order 协商）";
+        }
+        if (mw instanceof FinalAnswerFilterMiddleware) {
+            return "框架自带（框架不自动注入，必须显式注册）";
+        }
+        if (selfRegistered.contains(mw)) {
+            return "自建";
+        }
+        return "外部 Bean";
     }
 }
