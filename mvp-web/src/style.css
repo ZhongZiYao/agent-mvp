@@ -1,0 +1,81 @@
+/*
+ * 站 4：全局样式与设计变量。
+ *
+ * <p><b>为什么不用 UI 库</b>（Vant / Element Plus）：
+ * 本界面只用到「气泡」「输入框」「侧栏」三类东西，Vant 的强项（Form / Picker /
+ * Tabbar / PullRefresh）一个都用不上；而聊天气泡与流式光标本来就得自己写。
+ * 引一个 UI 库的收益 &lt; 依赖成本，也和 demo「依赖保持最小」的既定原则一致。</p>
+ *
+ * <p>设计取向：<b>技术感但不冷</b>。等宽字体只用在「需要精确比对的地方」
+ * （order 值、受理号、会话号），正文用系统字体。</p>
+ */
+
+:root {
+  /* 颜色 */
+  --c-bg: #f4f5f7;
+  --c-surface: #ffffff;
+  --c-surface-2: #fafbfc;
+  --c-border: #e3e6ea;
+  --c-border-strong: #cdd3da;
+  --c-text: #1c2128;
+  --c-text-dim: #6a737d;
+  --c-text-faint: #9aa3ad;
+  --c-primary: #4f46e5;
+  --c-primary-soft: #eef0fe;
+  --c-danger: #d64545;
+  --c-danger-soft: #fdeded;
+  --c-warn: #b7791f;
+  --c-warn-soft: #fdf6e7;
+  --c-ok: #2f855a;
+
+  /* 尺寸 */
+  --radius: 10px;
+  --radius-lg: 14px;
+  --gap: 12px;
+  --panel-w: 380px;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--c-text);
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* 等宽：只给「需要逐字符比对」的地方用 */
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  letter-spacing: -0.01em;
+}
