@@ -1,0 +1,69 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: agent-mvp
+  config:
+    # 导入仓库根目录的 .env 文件（KEY=VALUE 格式，与 .properties 兼容）。
+    # 导入后 MINIMAX_API_KEY 就是一个普通配置项，
+    # 于是 mvp.model.api-key: ${MINIMAX_API_KEY:} 能直接取到值。
+    #
+    # 两个路径都写：启动目录可能是项目根（java -jar），也可能是 mvp-app（mvn spring-boot:run -pl mvp-app）。
+    # optional: 前缀保证文件不存在时应用照常启动（只是没有 Key）。
+    import:
+      - "optional:file:.env[.properties]"
+      - "optional:file:../.env[.properties]"
+
+# 模型配置：密钥从 .env / 环境变量注入，不写进文件
+mvp:
+  auth:
+    # 签名密钥。生产必须用环境变量覆盖（至少 16 字节）。
+    token-secret: ${MVP_TOKEN_SECRET:mvp-dev-only-secret-change-me}
+    # 令牌有效期：2 小时
+    token-ttl-millis: 7200000
+  model:
+    provider: minimax
+    # 密钥只从环境变量读，不落文件。留空则首次请求报错（fail-fast）。
+    api-key: ${MINIMAX_API_KEY:}
+    # 国内端点；国际站改成 https://api.minimax.io/v1
+    base-url: https://api.minimaxi.com/v1
+    # 模型 ID —— 以「你账号实际可用」为准，一键自查：
+    #   powershell -ExecutionPolicy Bypass -File scripts\check-minimax.ps1
+    model: MiniMax-M3.1-Flash
+    stream: true
+    temperature: 0.3
+    # 注意字段名：MiniMax 已弃用 max_tokens，要求用 max_completion_tokens
+    max-completion-tokens: 1024
+  # 站 2：装配层参数（全部只影响 ReActAgent.Builder 上的格子）
+  agent:
+    # ReAct 迭代上限（工具调用轮数的硬顶）
+    max-iters: 5
+    # 模型调用级重试的「总尝试次数」。
+    # ⚠️ 名字叫 maxRetries，实际语义是 attempts：设 2 = 最多试 2 次（1 次原始 + 1 次重试）。
+    # ⚠️ 不设时框架默认就是 3，不是 0。
+    max-retries: 2
+    # modelExecutionConfig 里的尝试次数 —— 刻意与 max-retries 取不同值，
+    # 这样一眼就能看出「两个都设时到底谁生效」。
+    model-max-attempts: 5
+    # 单次模型调用超时（秒）
+    model-timeout-seconds: 60
+    # 首次重试前的退避基数（毫秒）与退避倍数
+    model-initial-backoff-millis: 500
+    model-backoff-multiplier: 2.0
+    # ⚠️ 站 2 挖到的坑的开关：
+    #   true  → 用框架的 modelExecutionConfig（超时 + 尝试次数 + 退避），此时 max-retries 会被整体丢弃
+    #   false → 只用 max-retries（框架把它翻译成 executionConfig.maxAttempts）
+    # 两种模式都实测过，见 docs/learning/agentscope-java-boundary-checklist.md 站 2 章节。
+    use-model-execution-config: true
+    # 会话状态并发写策略：OVERWRITE / FAIL / APPEND_MERGE
+    conflict-policy: OVERWRITE
+    # 工具权限模式：DEFAULT / ACCEPT_EDITS / EXPLORE / BYPASS / DONT_ASK
+    permission-mode: DEFAULT
+    # 禁止调用的工具名清单（框架给引擎，规则语义自己写）
+    denied-tools: []
+
+logging:
+  level:
+    io.agentscope: INFO
+    com.example.mvp: DEBUG
