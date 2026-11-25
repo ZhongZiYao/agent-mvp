@@ -61,6 +61,28 @@ Content-Type: application/json
   "message": "我的订单 SO202611250001 到哪了？"
 }
 
+### 7) 站 3：治理层 —— 发一条带手机号的消息，看出站脱敏
+###    期望：答复里的手机号变成 138****8000（不是原号）
+###    应用日志里 [audit] 留痕的也应当是脱敏后的 —— 因为审计比脱敏更外
+###    （用本地 mock 时 mock 会回显你发过去的手机号，方便看效果）
+POST {{baseUrl}}/api/chat/sync
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "message": "我的手机号是13800138000，麻烦帮我确认一下"
+}
+
+### 8) 站 3：治理层 —— 入站拦截命中，模型根本不会被调用
+###    期望：直接返回拒绝语；mock 端点不会收到新的请求
+POST {{baseUrl}}/api/chat/sync
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "message": "内部密钥放在哪里"
+}
+
 ### ------------------------------------------------------------------
 ### WebSocket 接入
 ### ------------------------------------------------------------------

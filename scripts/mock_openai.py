@@ -12,10 +12,15 @@
 然后把 demo 的 base-url 指到 http://localhost:9999/v1
 """
 import json
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9999
+
+# 回显请求里出现的手机号 —— 用来真机演示「出站脱敏」。
+# 没有它，mock 只能回固定文案，脱敏中间件在真机上永远没东西可脱。
+MOBILE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 
 
 def sse_chunk(delta, finish=None, usage=None):
@@ -45,16 +50,21 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = json.loads(raw)
             print(json.dumps(body, ensure_ascii=False, indent=2))
+            phones = MOBILE.findall(json.dumps(body, ensure_ascii=False))
         except Exception:
             print(raw)
+            phones = []
         print("=" * 78, flush=True)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
+        first = "【MOCK】已收到请求"
+        if phones:
+            first += "，回显您的手机号 " + phones[0]
         out = (
-            sse_chunk({"role": "assistant", "content": "【MOCK】已收到请求"})
+            sse_chunk({"role": "assistant", "content": first})
             + sse_chunk({"content": "，这是本地 mock 回复。"}, usage={
                 "prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18})
             + sse_chunk({}, finish="stop")
