@@ -5,7 +5,7 @@
 >
 > **判定结论与证据就在本仓库里**：
 > [`docs/learning/agentscope-java-boundary-checklist.md`](docs/learning/agentscope-java-boundary-checklist.md)
-> —— 7 站路线、逐件对照、复盘「框架已经给了我们又写了一遍」与「框架完全没给」，
+> —— 8 站路线、逐件对照、复盘「框架已经给了我们又写了一遍」与「框架完全没给」，
 > 每条结论都带**框架 jar 的实测类名 + 源码 `文件:行号`**双栏证据。
 >
 > 文档里的 `文件:行号` 指向**对照项目 [customer_work](https://github.com/ZhongZiYao/customer_work)**
@@ -14,8 +14,9 @@
 > 配套阅读：[一次真实请求的完整生命周期](docs/learning/agent-message-lifecycle.md) ·
 > [Agent 后端全景总结](docs/learning/agent-backend-summary.md)
 >
-> **技术栈**：AgentScope Java 2.0.5 · Spring Boot 4.1.3 · Java 21 · WebFlux（响应式）
-> **测试**：59 条全绿，全部用假模型与假存储，不烧 token、不联网
+> **技术栈**：AgentScope Java 2.0.5 · Spring Boot 4.1.3 · Java 21 · WebFlux（响应式）·
+> Vue 3.5 + TypeScript 6 + Vite 8 + Pinia 2
+> **测试**：后端 **72** 条 + 前端 **37** 条全绿，全部用假模型与假存储，不烧 token、不联网
 
 ---
 
@@ -27,11 +28,16 @@
 | 1 | 接入层（WS 帧 → 受理 → 编排） | ✅ 完成 |
 | 2 | 装配层（手写 AgentFactory + 治理装配器） | ✅ 完成 |
 | 3 | 治理层（中间件链 + `MiddlewareOrders` 契约） | ✅ 完成 |
-| 4 | 记忆 + RAG | ⬜ 待做 |
-| 5 | 出站（过滤 + 缓存） | ⬜ 待做 |
-| 6 | 多租户 + admin | ⬜ 待做 |
+| **4** | **前端接入**（Vue3 + TS + Vite，后端零改动） | ✅ 完成 |
+| 5 | 记忆 + RAG | ⬜ 待做 |
+| 6 | 出站（过滤 + 缓存） | ⬜ 待做 |
+| 7 | 多租户 + admin | ⬜ 待做 |
 
 **每站结束都能跑**，每站结束往边界清单追加一节。
+
+> **站 4 不是「加个界面」** —— 它挖出了站 3 的一个**真实 PII 泄漏**：
+> 出站脱敏只接在同步出口上，**流式出口（WS / SSE）把原手机号直出**。
+> 修法与回归测试见下文「站 4 挖出的漏洞」。
 
 ---
 
@@ -57,6 +63,14 @@ agent-mvp/
 │   ├── outbound/              OutboundFilter（出站过滤规则）
 │   ├── agent/                 AgentAssemblyController（站 2 装配快照）
 │   └── config/                JacksonConfig（Boot 4 的 Jackson 3 兼容）
+├── mvp-web/                   站 4：前端接入（Vue 3.5 + TS 6 + Vite 8 + Pinia 2）
+│   ├── src/types/api.ts       契约镜像（WsFrame 7 种帧）—— 由 api.test.ts 直接比对后端源码
+│   ├── src/utils/             ws.ts（帧分发 + 重连 + 心跳）· sse.ts（手动 SSE 解析）
+│   ├── src/api/               auth · chat · assembly（薄封装）
+│   ├── src/store/             chat.ts（幂等状态机）· assembly.ts · auth.ts
+│   ├── src/components/        AssemblyPanel · MessageList · MessageBubble · ChatInput · ChannelBar
+│   ├── src/views/ChatView.vue 组装（桌面左右分栏 / 移动单栏）
+│   └── scripts/verify-web.mjs Playwright 真机验证（15 项断言 + 7 张截图）
 ├── scripts/                   check-minimax.ps1（密钥自查）· mock_openai.py（本地 mock）· WsProbe.java（WS 探针）
 └── docs/                      （站 3 起补：每站的学习笔记）
 ```
@@ -113,6 +127,39 @@ mvn -B spring-boot:run -pl mvp-app
 > `maxRetries` 被 `modelExecutionConfig` 静默丢弃……），
 > 唯一的发现手段就是**把运行期的实际装配结果打出来看**。
 > 它还会暴露**框架自动注入的东西**（见下文 `GracefulShutdownMiddleware`）。
+
+### 起前端（站 4）
+
+```powershell
+Set-Location '<到 agent-mvp 的路径>\mvp-web'
+npm install --no-audit --no-fund
+
+npm run dev        # http://localhost:5176 （已配 proxy → 8088，不用管 CORS）
+npm run test       # vitest run，37 条
+npm run build      # vue-tsc -b && vite build
+```
+
+**不用装后端也能起**（前端会报连接失败，但界面和装配面板都能看）。
+要看完整对话，后端得起在 8088。
+
+> ⚠️ **vitest 必须在真实路径下跑** —— 通过 junction / 软链路径运行时，
+> happy-dom 解析模块会失败（`Cannot find module '/src/store/chat.test.ts'`）。
+>
+> ⚠️ **`vite.config.ts` 的 proxy 是必需的，不是可选的**：
+> 后端**零 CORS 配置**，前端必须经 Vite dev server 转发 `/api` 与 `/ws`。
+> 后端地址可用 `VITE_API_TARGET` 覆盖。
+
+### 不装浏览器也能跑的真机验证
+
+```powershell
+Set-Location '<到 agent-mvp 的路径>'
+node mvp-web\scripts\verify-web.mjs     # Playwright headless，15 项断言 + 7 张截图
+```
+
+脚本**不把 playwright 写进 `package.json`**（保持依赖最小），
+运行时按候选路径复用本机已装好的 playwright 与浏览器缓存。
+它会起后端 + mock + 前端，跑完 15 项断言：
+装配链、order 协商、WS 连接与增量、**出站脱敏**、入站拦截、幂等合并、SSE、响应式抽屉、控制台无错。
 
 ---
 
@@ -473,9 +520,15 @@ demo 站 2 那版 `MvpGovernanceAssembler` 里有一段升序预排序，站 3 �
    ⇒ 它**带着 `order()=1` 硬编码在链首，你注册 `order=999` 也压不过它**。
 2. `FinalAnswerFilterMiddleware` **框架不自动注入** —— 全 core jar 扫描显示除它自身外**无人引用**。
 
-`FinalAnswerFilterMiddleware` 的代价：**流式打字机效果完全消失**（要等到 `ModelCallEnd` 才一次性放出）。
+`FinalAnswerFilterMiddleware` 的代价：**流式打字机效果消失**（要等到 `ModelCallEnd` 才一次性放出）。
 customer_work 的 `AgentProperties#finalAnswerFilterEnabled` **默认 `false`**，注释里明写
 「默认关闭，因为代价对本项目的 C 端不可接受」。demo 挂它只为对照。
+
+> ⚠️ **站 4 的修正（实测 + 字节码）**：上面这句**只在 `onReasoning` 链段成立**。
+> 它**只覆写 `onReasoning`**（`javap` 实测），而 `streamEvents` 走的是 **`onAgent`** 链段
+> （`javap` 实测 `ReActAgent#buildAgentStream` → `MiddlewareChain.build(..., MiddlewareBase::onAgent, ...)`）
+> ⇒ **用户可见的正文流不受它影响**（`EventStreamShapeTest` 站4-13 实测：delta 仍逐片穿过）。
+> 站 4 的脱敏缓冲是**另一回事** —— 那是 `onAgent` 里我们自建的 `RedactionMiddleware` 干的。
 
 ### ④ customer_work 的 27 个中间件里，**没有一个是框架那 3 个的变体**
 
@@ -521,3 +574,103 @@ demo 里 `AuditTrailMiddleware`（order=150）在 `RedactionMiddleware`（order=
 | 6 | `FinalAnswerFilterMiddleware` | 1 | 框架自带（需显式注册） | 是 |
 
 第 1 项 **order=1 却排在 order=150 前面** —— 这一行就是「链首硬编码、不参与协商」的可视化。
+
+---
+
+## 站 4 验证的框架事实（前端接入）
+
+**这一站框架给了 0 个东西。** AgentScope Java 的 20 个 core 顶层包里，
+没有任何前端产物 —— 没有 JS/TS 包、没有模板、没有组件、没有状态容器、没有 HTTP 客户端。
+**这一站 100% 自建**，自建比例比站 3 还高。
+
+**硬约束：后端零改动** —— 站 4 只新增 `mvp-web/`，`mvp-app` 一行没改。
+
+**看图**（真机验证脚本自动产出，`docs/screenshots/`）：
+
+| 装配快照（右侧展开生效链） | 出站脱敏（手机号被掩码） |
+|---|---|
+| ![装配快照](docs/screenshots/mvp-web-01-assembly.png) | ![出站脱敏](docs/screenshots/mvp-web-03-redaction.png) |
+
+| 幂等合并（DUPLICATE 不覆盖首次正文） | 移动端单栏（≤899px 面板变抽屉） |
+|---|---|
+| ![幂等合并](docs/screenshots/mvp-web-05-idempotent.png) | ![移动端](docs/screenshots/mvp-web-07-mobile.png) |
+
+### ① 三个通道不能互相替代 —— **SSE 没有受理回执**
+
+| 通道 | 受理回执 | 幂等命中在前端 | 正文形态 |
+|---|---|---|---|
+| 同步 `POST /api/chat/sync` | ❌ | ❌ | 一次性全文 |
+| SSE `POST /api/chat/stream` | ❌ | ❌ **看不见** | 增量 |
+| **WS `/ws/user`** | ✅ `chat_accepted` | ✅ **看得见** | 增量 |
+
+> **「幂等在 SSE 上看不出来」是这一站最实用的一条结论**：
+> SSE 没有受理帧 ⇒ 前端拿不到 `acceptance` ⇒ 重复投递时服务端不二次调模型，
+> 但前端**既不知道重复了、也拿不到受理号** ⇒ 用户看到的是「转圈然后没反应」。
+> **客服场景要能对账、要能重发，就必须选 WebSocket。**
+> 这不是「WS 更好看」，是**协议能力**的差距。
+
+WS 帧契约 7 种（后端 `WsFrame` 常量）：
+`chat` / `chat_accepted` / `chat_chunk` / `chat_done` / `error` / `ping` / `pong`。
+
+### ② 契约用测试钉住：前端**直接读后端的 Java 源文件**
+
+`src/types/api.test.ts` 不去人肉抄常量，而是**读 `mvp-app` 里的 `WsFrame.java`**，
+把帧类型常量与前端 `types/api.ts` 逐一比对。
+
+**后端改常量 → 前端测试立刻变红。**
+这比任何文档都可靠 —— 它把「两份契约要手工同步」这个人工约定，变成了一个 CI 门禁。
+
+### ③ 前端踩的坑
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| **首条消息必报 `NOT_CONNECTED`** | 浏览器 WS 握手是**异步**的，`new WebSocket()` 返回时还没 `onopen` | `ChatWsClient.whenOpen(timeoutMs)` 显式等 `onopen` |
+| 重发徽章永远不显示 | 徽章渲染条件是 `isUser && resendCount`，却把计数挂在了**助手**气泡上 | 计数挂**用户**气泡 |
+| SSE 正文偶尔少一段 | **Spring 丢掉 SSE 的换行** | 解析器用「**裸行当续行**」兜住 |
+| `sending` 布尔量在并发时失真 | WS 允许多个请求同时在飞 | 改成**从消息 status 派生的 computed** |
+| 装配面板一片空白 | `AssemblyPanel` 忘了 `import` | 组件根本没被解析 —— **静默失败**，控制台无报错 |
+| vitest 在联接路径下全部失败 | happy-dom 在 junction 路径下解析模块失败 | **一律用真实路径**跑 |
+
+### ④ ★ 站 4 挖出的**站 3 真实治理漏洞**（这一站最值钱的东西）
+
+真机验证第 7 项断言打红：
+
+```
+FAIL 出站脱敏：手机号被掩码
+   实际答复：【MOCK】已收到请求，回显您的手机号 13800138000，这是本地 mock 回复。
+```
+
+**根因**：站 3 的 `RedactionMiddleware` **只改写 `AgentResultEvent`**（最终答复消息），
+**完全没碰 `TextBlockDeltaEvent`**（流式正文分片）。于是：
+
+| 出口 | 走的路径 | 结果 |
+|---|---|---|
+| 同步 `/api/chat/sync` | `AgentResultEvent` | ✅ 已脱敏 `138****8000` |
+| **WS `chat_chunk`** | `TextBlockDeltaEvent` | ❌ **原文 `13800138000` 直出** |
+| **SSE `chat_stream`** | `TextBlockDeltaEvent` | ❌ **原文直出** |
+
+**这不是「流式脱敏比较麻烦所以没做」，是典型的「能力只接在了被测试的那条路上」**：
+站 3 的 5 条治理用例**全部走 `agent.call()`（同步出口），一条流式用例都没有**。
+和 customer_work 反复踩的坑是**同一个形状**。
+
+**修法**（语义照抄 customer_work 的 `MaskingMiddleware`）：
+
+1. `TextBlockDeltaEvent` → **按 text block 缓冲，不放行**；
+2. `TextBlockEndEvent` → **整段脱敏，放出唯一一个安全 delta**；
+3. 流结束**兜底 flush** → 上游漏发块结束时仍要把已缓冲内容脱敏后放出（**fail-closed，绝不吐原文**）。
+
+**为什么不能「每片各脱敏一次」**：框架**逐字吐 delta**（`EventStreamShapeTest` 实测），
+手机号是 11 位数字 ⇒ **必然被切在多个 delta 里** ⇒ 任何单片都匹配不上 `1[3-9]\d{9}`。
+**也不能「保留尾部 N 字符等一等」**：正则长度无界，任何有限窗口都无法证明某个前缀
+永远不会在后续 chunk 里拼成手机号。⇒ **隐私保证优先于逐字延迟**。
+
+**代价（刻意取舍）**：打字机效果消失，正文整块到达。
+**这不是缺陷** —— customer_work 的 `MaskingMiddleware` 注释里写的是同一句话。
+
+**新增回归测试 13 条**（`RedactionStreamTest` 9 + `EventStreamShapeTest` 4），
+把「框架事件流形状」这个**设计前提**也钉住了：
+块生命周期、delta 的字符粒度、`withSource` 是原地改字段。
+
+> **这一站的价值不在「我写了个前端」**，而在
+> **「框架完全不管的这一层，会把前面几站藏起来的不一致全部暴露出来」**。
+> 如果这个 demo 只做到站 3 就发布出去，那个 PII 泄漏会一直留在代码里。

@@ -51,13 +51,22 @@
 | `GracefulShutdownMiddleware` 由 **`Builder#build()`** 自动插到链首 | 由 **`ReActAgent` 构造函数**插到链首，**不参与 order 协商**（排序发生在构造函数之前 ⇒ 你注册 order=999 也压不过它） | `javap` 反编译 `ReActAgent.<init>` offsets 171-212；运行时快照里它 order=1 却排第一 |
 | 框架自带 **`FinalAnswerFilterMiddleware`** 会被自动挂上 | **不会** —— 全 core jar 类扫描显示除它自身外**无人引用**，**必须显式注册** | 全 jar 引用扫描 + `javap` 常量池核对 |
 | `order()` 是「大的在外」还是「小的在外」（**待验证**） | **数值大的在外**（`Builder#build()` 降序排序 + `MiddlewareChain.build` 倒序包裹 ⇒ 列表首元素 = 最外层） | `javap` 反编译两处字节码 + `MiddlewareChainOrderTest` 运行时实证（入站降序 / 出站逆序） |
+| `FinalAnswerFilterMiddleware` 会「吃掉流式打字机效果」 | **只在 `onReasoning` 链段成立**。它只覆写 `onReasoning`；而 `streamEvents` 走 `onAgent` 链段 ⇒ **用户可见的正文流不受它影响** | `javap` 实测覆写的方法 + `javap` 实测 `buildAgentStream` 用的是 `MiddlewareBase::onAgent` + `EventStreamShapeTest` 站4-13 实测 delta 仍逐片穿过 |
+| 站 3 的出站脱敏**在所有出口都生效** | **只接在同步出口上**。它只改写 `AgentResultEvent`，没管 `TextBlockDeltaEvent` ⇒ **WS / SSE 把原手机号直出** | 站 4 真机验证第 7 项断言打红（`13800138000` 原文出站）；已修（按块缓冲 + 块结束整段脱敏 + 流末兜底），补 13 条回归测试 |
 
-> **这七条修正有个共同形状**：**早期结论都来自「读清单/读文档」，
+> **这九条修正有个共同形状**：**早期结论都来自「读清单/读文档」，
 > 而修正全部来自「把运行期的东西打出来看」**。
 > 与站 2 的 `AgentAssemblyAlignmentTest` 那条教训同源：
 > **断言红了先问「是代码错了还是断言错了」；结论背了先问「这是实测的还是推出来的」。**
 > 站 3 那条「`order()` 语义」尤其典型 —— 它是**唯一一条猜错就会让整套治理顺序反转**的结论，
 > 而它只靠 `javap` 反编译 + 运行时探针两次独立验证才敢写进文档。
+>
+> **最后那两条（站 4 挖出来的）更值得记**：
+> 一条是**结论本身错了**（`FinalAnswerFilterMiddleware` 的作用范围被高估了），
+> 一条是**代码本身有洞**（脱敏漏了流式出口）。
+> **前者靠一次 `javap` + 一条测试就查清了，后者靠一次真机点击才暴露。**
+> ⇒ **光看字节码不够 —— 字节码只能告诉你「它覆写了哪个方法」，
+> 告诉你不了「用户实际会看到什么」。**
 
 ---
 
@@ -119,17 +128,24 @@
 | 3 | 具体中间件 | ○ | 框架仅 **3 个**（其中 1 个需显式注册、1 个条件自动挂） | 27 个自建实现，**无一为框架那 3 个的变体** |
 | 3 | 顺序契约 | ○ | 框架**不提供**「顺序约定」这种概念 | `MiddlewareOrders` + `MiddlewareOrderContractTest` |
 | 3 | 可观测 | ◐ | `tracing` 包：`Tracer` / `OtelTracingMiddleware` / `TracerRegistry` | `ObservabilityMiddleware` 等 |
-| **4** | 短期状态 | ◐ | `AgentState` / `AgentStateStore` / `InMemoryAgentStateStore` / `JsonFileAgentStateStore` | 自建 Redis 持久化 |
-| 4 | 长期记忆 | ◐ | `LongTermMemory` / `LongTermMemoryMode` / `LongTermMemoryTools` | 自建记忆分层 |
-| 4 | RAG | ◐ | `rag` 包：`Knowledge` / `RAGMode` / `GenericRAGHook` | 自建知识库 + 分类复核 |
-| 4 | Skill | ● | `skill` 包：`SkillBox` / `AgentSkill` / `SkillRegistry` / `DynamicSkillMiddleware` | — |
-| 4 | 上下文压缩 | ◐ | `agentscope-harness`（`io.agentscope.harness.agent`） | `HarnessAgentFactory` 路由 |
-| **5** | 语义缓存 | ○ | core 无 cache 包 | `ReplyFinish.java:66-69`（`replayable()`） |
-| 5 | 缓存准入 | ○ | — | `CustomerServiceService.java:522-529` |
-| 5 | 落库 / 审计 | ○ | core 无 chatlog/audit 包 | `ChatTurnService.java:26-52` |
-| **6** | 多租户隔离 | ○ | core 无 tenant 包 | `TenantContextMiddleware` + 独立库 |
-| 6 | 工单 / 转人工 | ○ | core 无 ticket/handoff 包 | `HandoffService` |
-| 6 | 渠道接入 | ● | `extensions-channel-*`（feishu/wecom/dingtalk/weixin/github/gitlab） | `customer-channel` 模块 |
+| **4** | 前端产物 | ○ | core **没有任何前端产物**（无 JS/TS 包、无模板、无组件） | demo `mvp-web/`（Vue 3.5 + TS 6 + Vite 8 + Pinia 2） |
+| 4 | WS 客户端 | ○ | — | demo `utils/ws.ts`（帧分发 + 指数退避重连 + ping 心跳） |
+| 4 | SSE 客户端 | ○ | — | demo `utils/sse.ts`（`TextDecoder({stream:true})` 手动解析） |
+| 4 | 幂等状态机 | ○ | 框架**不知道「重复投递」是什么** | demo `store/chat.ts`（`clientMsgId` 幂等键 + DUPLICATE 合并） |
+| 4 | 契约类型镜像 | ◐ | 框架给 Java 侧事件类型，**前端镜像类型要自建** | demo `types/api.ts` + `types/api.test.ts`（**直接读后端 `WsFrame.java` 比对常量**） |
+| 4 | 跨域 | ○ | — | demo `vite.config.ts` proxy（后端**零 CORS 配置**） |
+| 4 | 装配可视化 | ○ | 框架**不提供**「把运行期装配导出来看」的能力 | demo `AssemblyPanel.vue` ← `/api/agent/assembly` 的 `chain` 段 |
+| **5** | 短期状态 | ◐ | `AgentState` / `AgentStateStore` / `InMemoryAgentStateStore` / `JsonFileAgentStateStore` | 自建 Redis 持久化 |
+| 5 | 长期记忆 | ◐ | `LongTermMemory` / `LongTermMemoryMode` / `LongTermMemoryTools` | 自建记忆分层 |
+| 5 | RAG | ◐ | `rag` 包：`Knowledge` / `RAGMode` / `GenericRAGHook` | 自建知识库 + 分类复核 |
+| 5 | Skill | ● | `skill` 包：`SkillBox` / `AgentSkill` / `SkillRegistry` / `DynamicSkillMiddleware` | — |
+| 5 | 上下文压缩 | ◐ | `agentscope-harness`（`io.agentscope.harness.agent`） | `HarnessAgentFactory` 路由 |
+| **6** | 语义缓存 | ○ | core 无 cache 包 | `ReplyFinish.java:66-69`（`replayable()`） |
+| 6 | 缓存准入 | ○ | — | `CustomerServiceService.java:522-529` |
+| 6 | 落库 / 审计 | ○ | core 无 chatlog/audit 包 | `ChatTurnService.java:26-52` |
+| **7** | 多租户隔离 | ○ | core 无 tenant 包 | `TenantContextMiddleware` + 独立库 |
+| 7 | 工单 / 转人工 | ○ | core 无 ticket/handoff 包 | `HandoffService` |
+| 7 | 渠道接入 | ● | `extensions-channel-*`（feishu/wecom/dingtalk/weixin/github/gitlab） | `customer-channel` 模块 |
 
 ---
 
@@ -550,7 +566,7 @@ WS 探针                 →  chat_accepted(ACCEPTED) → chat_chunk×2 → cha
 
 ### 站 3 — 治理层（✅ 已完成并真机验证）
 
-**这是 7 站里框架参与最少、我们代码最多的一站。**
+**这是 8 站里框架参与最少、我们代码最多的一站。**
 框架给的是**插槽**（5 个 default 方法的接口）+ **排序契约**，
 「塞什么、什么顺序、怎么协作」全是业务决策。
 
@@ -633,11 +649,25 @@ this.middlewares = List.copyOf(all);
 全 jar 扫描：除它自身外**无人引用**。
 
 **`FinalAnswerFilterMiddleware` 的代价**（customer_work 已经踩过）：
-它要等到 `ModelCallEndEvent` 才把缓冲的文本一次性放出 ⇒ **流式打字机效果完全消失**，
+它要等到 `ModelCallEndEvent` 才把缓冲的文本一次性放出 ⇒ **流式打字机效果消失**，
 而且「调用工具前的中间叙述」在**有工具调用**时会被**彻底丢弃**。
 customer_work 的 `AgentProperties#finalAnswerFilterEnabled` **默认 `false`**，
 注释里明写「默认关闭，因为代价对本项目的 C 端不可接受」。
 demo 挂它只为对照，不依赖它的行为。
+
+> ⚠️ **站 4 的修正（实测 + 字节码）**：站 3 写的是「**流式打字机效果完全消失**」——
+> **这句只在 `onReasoning` 链段成立**，对 `streamEvents` 拿到的那条流**不成立**。
+>
+> 1. `javap` 实测：它**只覆写 `onReasoning`**，不覆写 `onAgent`；
+> 2. `javap` 实测 `ReActAgent#buildAgentStream`：
+>    `MiddlewareChain.build(middlewares, this, ctx, MiddlewareBase::onAgent, core)`
+>    ⇒ **`streamEvents` 走的是 `onAgent` 链段**；
+> 3. `EventStreamShapeTest` 站4-13 实测：只挂它时，`onAgent` 流里的 delta **仍逐片穿过**。
+>
+> ⇒ **正确的说法是**：它合并的是**推理链段**的文本；
+> **`streamEvents` / WS / SSE 这条「用户可见的正文流」不受它影响。**
+> 站 4 的脱敏缓冲是**另一回事**（那是 `onAgent` 里我们自建的 `RedactionMiddleware` 干的），
+> 两者别混为一谈。
 
 **框架给的是插槽，不是策略。** `MiddlewareBase` 是**接口**，全部方法都是 `default`：
 
@@ -801,7 +831,7 @@ customer_work 用 `GracefulShutdownManager` 把它接进自己的生命周期，
 | 排序机制 | `order()` + `Builder#build()` 里的降序重排 + 稳定的 `List.sort` | **●** |
 | 链实现 | `MiddlewareChain.build`（倒序包裹） | **●** |
 | 自动注入的停机件 | `GracefulShutdownMiddleware`（链首硬编码） | **●** |
-| 最终答复过滤 | `FinalAnswerFilterMiddleware`（需显式注册；**会吃掉流式效果**） | **●**（默认不用） |
+| 最终答复过滤 | `FinalAnswerFilterMiddleware`（需显式注册；**只作用于 `onReasoning`**，不影响 `onAgent` 的正文流） | **●**（默认不用） |
 | 任务提醒 | `TaskReminderMiddleware`（`taskListEnabled` 时自动挂） | **●** |
 | 顺序契约 | — | **○** 自建（`MiddlewareOrders` 27 常量 + 契约守卫测试） |
 | 具体治理策略 | — | **○** 27 个自建 |
@@ -821,7 +851,190 @@ customer_work 用 `GracefulShutdownManager` 把它接进自己的生命周期，
 
 ---
 
-### 站 4 — 记忆 + RAG（待实施）
+### 站 4 — 前端接入（✅ 已完成并真机验证）
+
+**这一站是「框架的盲区有多大」的最直观答案**：
+AgentScope Java 的 20 个 core 顶层包里，**没有一个与前端沾边** ——
+没有 JS/TS 包、没有模板、没有组件、没有状态容器、没有 HTTP 客户端。
+**这一站 100% 是自建**，而且自建的比例比站 3 还高。
+
+**为什么把前端插在治理层之后、记忆之前**：
+站 0~3 都是「后端一条链」，看不出**跨出口的不一致**。
+站 4 一旦接上前端，**同一个治理件在三条出口（同步 / SSE / WS）上的行为差异立刻暴露** ——
+事实上站 4 的第一个真机断言就打红了（见 4.6）。
+
+**硬约束：后端零改动。** 站 4 只新增 `mvp-web/`，`mvp-app` 一行没改。
+这既是「学框架」的纪律（别为了前端去改后端），也恰好制造了站 4 的价值 ——
+**只有不改后端，才能证明前端拿到的就是后端的真实契约**。
+
+#### 4.1 框架在这一站给了什么：**0 个**
+
+| 能力 | 框架 2.0.5 | 判定 |
+|---|---|---|
+| 前端运行时 / 组件 / 模板 | 无 | **○** |
+| HTTP 客户端 | 无 | **○** |
+| WebSocket 客户端 | 无 | **○** |
+| SSE 客户端 | 无 | **○** |
+| 状态管理 | 无 | **○** |
+| 前端类型（帧契约） | 只有 Java 侧事件类型 | **◐** 镜像类型自建 |
+| CORS | 不涉及（框架是服务端库） | **○** |
+
+> ⚠️ **最容易被误解的一点**：`agentscope-extensions-agui` 2.0.5 提供了 AG-UI 协议适配
+> （50+ 类），看起来「前端这块框架给了」。
+> 但那是**服务端把事件流翻译成 AG-UI 事件**，**前端仍然要自己实现 AG-UI 客户端**。
+> demo 没用它 —— 那是另一条路线的入口，不是「前端免开发」。
+
+#### 4.2 技术栈拍板：**不引 UI 库、不引 axios**
+
+| 项 | 选择 | 为什么 |
+|---|---|---|
+| 框架 | Vue **3.5.39** + TS **~6.0.2** | 与 customer_work 两个既有前端**版本完全一致**（少一套心智） |
+| 构建 | Vite **8.1.1** | proxy 是**必需**的：后端零 CORS 配置 |
+| 状态 | Pinia **2.3.1** | 3 个 store 就够，不需要更重的东西 |
+| 测试 | vitest **4.1.11** + `@vue/test-utils` **2.5.0** + happy-dom **20.11.12** | 同上 |
+| UI 组件库 | **不引**（不用 Vant / Element Plus） | 依赖成本 > 收益；CSS 手写 + CSS 变量就够 |
+| HTTP 客户端 | **不引 axios** | `fetch` + 手写 SSE 解析，20 行搞定 |
+| 端口 | **5176** | 避开 customer_work 的 5174 / 5175 |
+
+> **不引 UI 库这一条是有代价的**：响应式布局、抽屉、徽章全手写。
+> 换来的是 `package.json` 里**零 UI 依赖**，任何人 clone 下来 `npm i` 就能跑，
+> 而且**读得懂每一行** —— 这对一个「教学 + 求职展示」仓库更重要。
+
+#### 4.3 前端分层：每一层只干一件事
+
+```
+src/
+├── types/api.ts          契约镜像（WsFrame 7 种帧 + 各 data 接口）
+├── utils/ws.ts           ChatWsClient：帧分发 / 指数退避重连 / ping 心跳 / whenOpen
+├── utils/sse.ts          parseSseStream：TextDecoder({stream:true}) 手动解析
+├── api/                  auth · chat · assembly（薄封装，只管 URL 和 body）
+├── store/                auth · assembly · chat（Pinia）
+├── components/           AssemblyPanel · MessageList · MessageBubble · ChatInput · ChannelBar
+└── views/ChatView.vue    组装
+```
+
+**分层纪律**：**`utils` 不认识业务，`api` 不改状态，`store` 不碰 DOM，`components` 不发请求。**
+所以幂等状态机（`store/chat.ts`）能被单独测 —— 37 条前端测试里 20 条打在这儿（`chat.test.ts` 20 + `sse.test.ts` 12 + `api.test.ts` 5）。
+
+#### 4.4 三个通道的实测差异（这一站的真正价值）
+
+同一个后端，三条出口，前端要写三套处理：
+
+| 通道 | 协议 | 受理回执 | 幂等可见 | 正文形态 |
+|---|---|---|---|---|
+| 同步 `POST /api/chat/sync` | HTTP | ❌ 无 | ❌ 看不见 | 一次性全文 |
+| SSE `POST /api/chat/stream` | SSE | ❌ 无 | ❌ **看不见** | 增量 |
+| **WS `/ws/user`** | WebSocket | ✅ `chat_accepted` | ✅ **看得见** | 增量 |
+
+> **「幂等在 SSE 上看不出来」是这一站最实用的一条结论**：
+> SSE 没有受理帧 → 前端拿不到 `acceptance` → 重复投递时服务端不二次调模型，
+> 但前端**既不知道重复了、也拿不到受理号** → 用户看到的是「转圈然后没反应」。
+> **客服场景要能对账、要能重发，就必须选 WebSocket。**
+> 这不是「WS 更好看」，是**协议能力**的差距。
+
+**WS 帧契约（7 种，后端 `WsFrame` 常量）**：
+`chat` / `chat_accepted` / `chat_chunk` / `chat_done` / `error` / `ping` / `pong`。
+
+#### 4.5 幂等在前端怎么落地
+
+后端幂等键 = **`userId + clientMsgId`**（站 1）。前端的责任是**保证 `clientMsgId` 稳定**：
+
+1. `clientMsgId` 在**发送时生成一次**，跟着消息对象走，重发时**复用同一个**；
+2. 收到 `chat_accepted` 时**回填受理号与会话号**到那条用户消息上；
+3. 收到 `status = DUPLICATE` 时：
+   - **不新建**助手气泡；
+   - **不覆盖**首次的正文；
+   - 在**用户气泡**上挂「幂等命中 · 未重复调模型」徽章；
+   - 顶部提示条说明「重复投递已合并（受理号 ACC-x）—— 服务端没有二次调用模型」。
+
+> **「重发计数挂用户气泡」是个小坑**：徽章的渲染条件是 `isUser && message.resendCount`，
+> 挂在助手气泡上**永远不显示** —— 代码看着对，界面什么都不出。
+> 这类「断言写错位置 → 表现是功能没做」的问题，只能靠真机点一遍发现。
+
+#### 4.6 ★ 站 4 挖出的**站 3 真实治理漏洞**（这一站最值钱的东西）
+
+**真机验证第 7 项断言打红**：
+
+```
+FAIL 出站脱敏：手机号被掩码
+   实际答复：【MOCK】已收到请求，回显您的手机号 13800138000，这是本地 mock 回复。
+```
+
+**根因**：站 3 的 `RedactionMiddleware` **只改写 `AgentResultEvent`**（最终答复消息），
+**完全没碰 `TextBlockDeltaEvent`**（流式正文分片）。于是：
+
+| 出口 | 走的路径 | 结果 |
+|---|---|---|
+| 同步 `/api/chat/sync` | `AgentResultEvent` | ✅ 已脱敏 `138****8000` |
+| **WS `chat_chunk`** | `TextBlockDeltaEvent` | ❌ **原文 `13800138000` 直出** |
+| **SSE `chat_stream`** | `TextBlockDeltaEvent` | ❌ **原文直出** |
+
+**这不是「流式脱敏比较麻烦所以没做」，是典型的「能力只接在了被测试的那条路上」**：
+站 3 的 5 条治理用例**全部走 `agent.call()`（同步出口），一条流式用例都没有**。
+和 customer_work 反复踩的坑是**同一个形状**。
+
+**修法**（语义照抄 customer_work 的 `MaskingMiddleware`）：
+
+1. `TextBlockDeltaEvent` → **按 text block 缓冲，不放行**；
+2. `TextBlockEndEvent` → **整段脱敏，放出唯一一个安全 delta**，再放块结束事件；
+3. 流结束**兜底 flush** → 上游漏发块结束时仍要把已缓冲内容脱敏后放出（**fail-closed，绝不吐原文**）。
+
+**为什么不能「每片各脱敏一次」**：框架**逐字吐 delta**（`EventStreamShapeTest` 实测），
+手机号是 11 位数字 ⇒ **必然被切在多个 delta 里** ⇒ 任何单片都匹配不上 `1[3-9]\d{9}`。
+**也不能「保留尾部 N 字符等一等」**：正则长度无界，任何有限窗口都无法证明某个前缀
+永远不会在后续 chunk 里拼成手机号。⇒ **隐私保证优先于逐字延迟**。
+
+**代价（刻意取舍）**：打字机效果消失，正文整块到达。
+**这不是缺陷** —— customer_work 的 `MaskingMiddleware` 注释里写的是同一句话。
+
+**新增回归测试 13 条**（`RedactionStreamTest` 9 + `EventStreamShapeTest` 4），
+把「框架事件流形状」这个**设计前提**也钉住了：
+块生命周期、delta 的字符粒度、`withSource` 是原地改字段。
+
+#### 4.7 站 4 踩的坑
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| **首条消息必报 `NOT_CONNECTED`** | 浏览器 WS 握手是**异步**的，`new WebSocket()` 返回时还没 `onopen` | `ChatWsClient.whenOpen(timeoutMs)` 显式等 `onopen`（配 waiters 队列） |
+| 重发徽章永远不显示 | 徽章渲染条件是 `isUser && resendCount`，却把计数挂在了**助手**气泡上 | 计数挂**用户**气泡 |
+| SSE 正文偶尔少一段 | **Spring 丢掉 SSE 的换行** | 解析器用「**裸行当续行**」兜住；WS 走 JSON 天然没这问题 |
+| `sending` 布尔量在并发时失真 | WS 允许多个请求同时在飞 | `sending` 改成**从消息 status 派生的 computed** |
+| 幂等命中时界面「没反应」 | SSE 没有受理帧 ⇒ 前端不知道重复了 | 选 WS（有 `chat_accepted`） |
+| 装配面板一片空白 | `AssemblyPanel` 忘了 `import` | 组件根本没被解析 —— **静默失败**，控制台无报错 |
+| `MessageList` 报 `messages` 未定义 | `defineProps` 没赋值 | `const props = defineProps<...>()`，模板用 `props.messages` |
+| vitest 在联接路径下全部失败 | happy-dom 在 junction 路径下解析模块失败 | **一律用真实路径** `..\agent-mvp\mvp-web` 跑 |
+
+#### 4.8 契约用测试钉住：前端直接读后端的 Java 源文件
+
+`src/types/api.test.ts` **不去人肉抄常量**，而是**读后端的 `WsFrame.java`**，
+把 7 个帧类型常量与前端 `types/api.ts` 里的定义**逐一比对**：
+
+```ts
+// 直接读 ../../mvp-app/src/main/java/.../WsFrame.java
+// 正则抓 TYPE_XXX = "xxx"，与前端 WsFrameType 常量表比对
+```
+
+**后端改常量 → 前端测试立刻变红**。这比任何文档都可靠 ——
+**它把「两份契约要手工同步」这个人工约定，变成了一个 CI 门禁。**
+
+#### 4.9 站 4 的边界判定
+
+| 能力 | 框架 2.0.5 给的 | 判定 |
+|---|---|---|
+| 任何前端产物 | — | **○** 全自建 |
+| 帧契约的**协议设计** | `event` 包（Java 侧） | **◐** 协议自定，前端镜像自建 |
+| 幂等语义 | 框架**不知道「重复投递」是什么** | **○** 全自建（键的设计 + 前端状态机） |
+| 装配可视化 | 框架**不提供** | **○** 自建（后端 `chain` 段 + 前端面板） |
+| 跨域 | — | **○** 自建（Vite proxy） |
+
+> **这一站的价值不在「我写了个前端」**，而在
+> **「框架完全不管的这一层，会把前面几站藏起来的不一致全部暴露出来」**。
+> 站 4 的 15 项真机断言里，有 1 项打红 —— 红的那个是**站 3 的漏洞**。
+> **如果这个 demo 只做到站 3 就发布出去，那个 PII 泄漏会一直留在代码里。**
+
+---
+
+### 站 5 — 记忆 + RAG（待实施）
 
 | 能力 | 框架 2.0.5 给的 | 判定 |
 |---|---|---|
@@ -839,7 +1052,7 @@ customer_work 用 `GracefulShutdownManager` 把它接进自己的生命周期，
 
 ---
 
-### 站 5 — 出站（待实施）
+### 站 6 — 出站（待实施）
 
 **框架在这一站只给「事件」，不给「出口」。**
 
@@ -860,7 +1073,7 @@ customer_work 用 `GracefulShutdownManager` 把它接进自己的生命周期，
 
 ---
 
-### 站 6 — 多租户 + admin（待实施）
+### 站 7 — 多租户 + admin（待实施）
 
 **这一站是「框架给了但要不要用」的分水岭。**
 
@@ -1061,16 +1274,17 @@ Get-Content "$root\core\middleware\MiddlewareOrders.java" -Encoding UTF8 |
 
 ---
 
-## 8. 后续计划（站 4 → 站 6）
+## 8. 后续计划（站 5 → 站 7）
 
 | 站 | 目标 | 结束时的判定产出 | 状态 |
 |---|---|---|---|
 | 1 | WS 帧 → 受理 → 编排 | 「框架在接入层给了 0 个东西」的证据链 | ✅ 完成 |
 | 2 | 手写 AgentFactory + 治理装配器 | 逐件对照 `CustomerServiceAgentFactory` 的 14 个零件 | ✅ 完成 |
 | 3 | 中间件链 + `MiddlewareOrders` 契约 | 27 个中间件里，**框架其实已给的有几个** → 实测结清：**0 个是变体**，框架只给插槽 + 排序契约 + 1 个自动注入件 | ✅ 完成 |
-| 4 | 记忆 + RAG | `RedisAgentStateStore` 能否替掉自建持久化 | ⬜ 待做 |
-| 5 | 出站 + 缓存 | 缓存准入收口是否只能是 `ReplyFinish#replayable()` | ⬜ 待做 |
-| 6 | 多租户 + admin | **框架 admin starter 与自建 admin 的职责边界线** | ⬜ 待做 |
+| 4 | **前端接入**（后端零改动） | 前端这一层框架给了什么 → 实测结清：**0 个**；并**挖出站 3 的流式脱敏漏洞**（PII 直出） | ✅ 完成 |
+| 5 | 记忆 + RAG | `RedisAgentStateStore` 能否替掉自建持久化 | ⬜ 待做 |
+| 6 | 出站 + 缓存 | 缓存准入收口是否只能是 `ReplyFinish#replayable()` | ⬜ 待做 |
+| 7 | 多租户 + admin | **框架 admin starter 与自建 admin 的职责边界线** | ⬜ 待做 |
 
 **每站都必须可运行**，并且每站结束追加一节到本文档的「逐站详表」。
 
@@ -1084,7 +1298,17 @@ Get-Content "$root\core\middleware\MiddlewareOrders.java" -Encoding UTF8 |
 3. **`order()` 到底是「大的在外」还是「小的在外」？**
    → **数值大的在外**。字节码两处 + 运行时探针双重验证（详见 3.1）。
 
-**站 4 已经能带着走的问题**：
+**站 4 已经结清的问题**：
+
+1. **框架在前端这一层给了什么？** → **0 个**。20 个 core 顶层包里没有任何前端产物（详见 4.1）。
+2. **三条出口（同步 / SSE / WS）能互相替代吗？** → **不能**。
+   SSE **没有受理回执**，幂等命中在前端**看不出来** ⇒ 客服场景必须选 WebSocket（详见 4.4）。
+3. **前端的契约怎么保证不漂移？** → **前端测试直接读后端 `WsFrame.java` 比对常量**，
+   后端改常量前端立刻变红（详见 4.8）。
+4. ★ **站 3 的治理在流式出口上生效吗？** → **不生效**（PII 泄漏）——
+   已修（按块缓冲 + 块结束整段脱敏 + 流末兜底），补 13 条回归测试（详见 4.6）。
+
+**站 5 已经能带着走的问题**：
 
 1. `AgentStateStore` 框架只给接口，`InMemory` / `JsonFile` 两个实现够不够？
    customer_work 自建的 Redis 版能不能替掉？**版本号 CAS 谁来做**（框架默认实现返回 `-1` = 不支持版本）？
@@ -1108,7 +1332,7 @@ Set-Location 'E:\Program Files\java_web\customer_work\agent-mvp-link'
 $env:JAVA_HOME='D:\Program Files\JAVA\jdk-21'      # 本机 JDK 21
 $env:Path="$env:JAVA_HOME\bin;$env:Path"
 
-mvn -B clean test                                   # 59 个用例，不烧 token
+mvn -B clean test                                   # 72 个用例，不烧 token
 $env:MINIMAX_API_KEY='<你的 key>'
 mvn -B spring-boot:run -pl mvp-app                   # 起在 8088
 ```
