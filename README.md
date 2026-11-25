@@ -3,8 +3,19 @@
 > 这个 demo 的**唯一目的**：用能跑的代码，逐项回答「AgentScope Java 到底给了什么，
 > 哪些是框架直接给、哪些半自建、哪些全自建」。
 >
-> 判定结论与证据整理在：
-> `customer_work/docs/learning/agentscope-java-boundary-checklist.md`
+> **判定结论与证据就在本仓库里**：
+> [`docs/learning/agentscope-java-boundary-checklist.md`](docs/learning/agentscope-java-boundary-checklist.md)
+> —— 7 站路线、逐件对照、复盘「框架已经给了我们又写了一遍」与「框架完全没给」，
+> 每条结论都带**框架 jar 的实测类名 + 源码 `文件:行号`**双栏证据。
+>
+> 文档里的 `文件:行号` 指向**对照项目 [customer_work](https://github.com/ZhongZiYao/customer_work)**
+> （AgentScope Java 2.0.4 的企业级智能客服平台）—— 本仓库只含 demo 本身，不含那些源码。
+>
+> 配套阅读：[一次真实请求的完整生命周期](docs/learning/agent-message-lifecycle.md) ·
+> [Agent 后端全景总结](docs/learning/agent-backend-summary.md)
+>
+> **技术栈**：AgentScope Java 2.0.5 · Spring Boot 4.1.3 · Java 21 · WebFlux（响应式）
+> **测试**：44 条全绿，全部用假模型与假存储，不烧 token、不联网
 
 ---
 
